@@ -193,6 +193,7 @@ contract Huski is Context, IERC20, IERC20Metadata
     uint256 private _rTotal;
     uint256 private _tReflectTotal;
     uint256 private _tBurnTotal;
+
     uint256 private constant MAX = ~uint256(0);
     
     uint256 private constant _burnTax = 10;
@@ -210,17 +211,17 @@ contract Huski is Context, IERC20, IERC20Metadata
         _rOwned[_msgSender()] = _rTotal;
     }
 
-    function name() public view virtual override returns (string memory) 
+    function name() public view override returns (string memory) 
     {
         return _name;
     }
 
-    function symbol() public view virtual override returns (string memory) 
+    function symbol() public view override returns (string memory) 
     {
         return _symbol;
     }
 
-    function decimals() public view virtual override returns (uint8) 
+    function decimals() public view override returns (uint8) 
     {
         return _decimals;
     }
@@ -235,24 +236,24 @@ contract Huski is Context, IERC20, IERC20Metadata
         return tokenFromReflection(_rOwned[account]);
     }
 
-    function transfer(address recipient, uint256 amount) public virtual override returns (bool) 
+    function transfer(address recipient, uint256 amount) public override returns (bool) 
     {
         _transfer(_msgSender(), recipient, amount);
         return true;
     }
 
-    function allowance(address owner, address spender) public view virtual override returns (uint256) 
+    function allowance(address owner, address spender) public view override returns (uint256) 
     {
         return _allowances[owner][spender];
     }
 
-    function approve(address spender, uint256 amount) public virtual override returns (bool) 
+    function approve(address spender, uint256 amount) public override returns (bool) 
     {
         _approve(_msgSender(), spender, amount);
         return true;
     }
 
-    function transferFrom(address sender, address recipient, uint256 amount) public virtual override returns (bool) 
+    function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) 
     {
         _transfer(sender, recipient, amount);
 
@@ -267,13 +268,13 @@ contract Huski is Context, IERC20, IERC20Metadata
         return true;
     }
 
-    function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) 
+    function increaseAllowance(address spender, uint256 addedValue) public returns (bool) 
     {
         _approve(_msgSender(), spender, _allowances[_msgSender()][spender] + addedValue);
         return true;
     }
 
-    function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) 
+    function decreaseAllowance(address spender, uint256 subtractedValue) public returns (bool) 
     {
         uint256 currentAllowance = _allowances[_msgSender()][spender];
         require(currentAllowance >= subtractedValue, "ERC20: decreased allowance below zero");
@@ -374,7 +375,7 @@ contract Huski is Context, IERC20, IERC20Metadata
         }
     }
 
-    function _transfer(address sender, address recipient, uint256 amount) internal virtual 
+    function _transfer(address sender, address recipient, uint256 amount) private 
     {
         require(sender != address(0), "ERC20: transfer from the zero address");
         require(recipient != address(0), "ERC20: transfer to the zero address");
@@ -391,7 +392,7 @@ contract Huski is Context, IERC20, IERC20Metadata
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
-    function _burn(address account, uint256 amount) internal virtual 
+    function _burn(address account, uint256 amount) private
     {
         require(account != address(0), "ERC20: burn from the zero address");
 
@@ -410,7 +411,7 @@ contract Huski is Context, IERC20, IERC20Metadata
         emit Burn(account, amount);
     }
 
-    function _approve(address owner, address spender, uint256 amount) internal virtual 
+    function _approve(address owner, address spender, uint256 amount) private 
     {
         require(owner != address(0), "ERC20: approve from the zero address");
         require(spender != address(0), "ERC20: approve to the zero address");
