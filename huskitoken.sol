@@ -180,6 +180,7 @@ contract Huski is Context, IERC20, IERC20Metadata
     using Address for address;
 
     event Burn(address indexed from, uint256 value);
+    event Reflect(address indexed from, uint256 value);
 
     mapping (address => uint256) private _rOwned;
     mapping (address => uint256) private _tOwned;
@@ -256,7 +257,6 @@ contract Huski is Context, IERC20, IERC20Metadata
     function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) 
     {
         _transfer(sender, recipient, amount);
-
         uint256 currentAllowance = _allowances[sender][_msgSender()];
         require(currentAllowance >= amount, "ERC20: transfer amount exceeds allowance");
 
@@ -297,18 +297,25 @@ contract Huski is Context, IERC20, IERC20Metadata
         return _tBurnTotal;
     }
 
-    function reflect(uint256 tAmount) public 
+    function reflect(uint256 amount) public 
     {
-        address sender = _msgSender();
+        _reflect(_msgSender(), amount);
+    }
+
+    function _reflect(address account, uint256 tAmount) private
+    {
         (uint256 rAmount,,,,,) = _getValues(tAmount);
-        _rOwned[sender] = _rOwned[sender] - rAmount;
+        _rOwned[account] = _rOwned[account] - rAmount;
         _rTotal = _rTotal - rAmount;
         _tReflectTotal = _tReflectTotal + tAmount;
+
+        emit Reflect(account, tAmount);
     }
 
     function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) 
     {
         require(tAmount <= _tTotal, "Amount must be less than supply");
+
         if (!deductTransferFee) 
         {
             (uint256 rAmount,,,,,) = _getValues(tAmount);
@@ -380,12 +387,9 @@ contract Huski is Context, IERC20, IERC20Metadata
         require(sender != address(0), "ERC20: transfer from the zero address");
         require(recipient != address(0), "ERC20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
-        
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tBurn) = _getValues(amount);
-
         _rOwned[sender] = _rOwned[sender] - rAmount;
         _rOwned[recipient] = _rOwned[recipient] + rTransferAmount;
-
         _burn(sender, tBurn);
         _reflectFee(rFee, tFee);
 
@@ -395,7 +399,6 @@ contract Huski is Context, IERC20, IERC20Metadata
     function _burn(address account, uint256 amount) private
     {
         require(account != address(0), "ERC20: burn from the zero address");
-
         uint256 accountBalance = _rOwned[account];
         require(accountBalance >= amount, "ERC20: burn amount exceeds balance");
 
@@ -405,7 +408,6 @@ contract Huski is Context, IERC20, IERC20Metadata
         }
 
         _tTotal = _tTotal - amount;
-
         _tBurnTotal = _tBurnTotal + amount;
 
         emit Burn(account, amount);
@@ -415,7 +417,6 @@ contract Huski is Context, IERC20, IERC20Metadata
     {
         require(owner != address(0), "ERC20: approve from the zero address");
         require(spender != address(0), "ERC20: approve to the zero address");
-
         _allowances[owner][spender] = amount;
 
         emit Approval(owner, spender, amount);
@@ -430,7 +431,6 @@ contract Huski is Context, IERC20, IERC20Metadata
     {
         uint256 currentAllowance = allowance(account, _msgSender());
         require(currentAllowance >= amount, "ERC20: burn amount exceeds allowance");
-
         _approve(account, _msgSender(), currentAllowance - amount);
         _burn(account, amount);
     }
