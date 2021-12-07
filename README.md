@@ -1,6 +1,8 @@
 # Huski
-https://www.huski.app
+https://www.hski.app
 
-One billion initial token supply. Truely deflationary. 
+One billion initial total supply. Truely deflationary. 
 
-20% transfer tax, 10% burn, 10% redistribution.
+15% transfer fee, 5% redistribution, 5% lottery pool, 5% burn.
+
+Unique LP functionality that raises BNB to be locked forever into the HSKI liquidity pool. By using this lottery function, BNB is swapped for HSKI, thereby only adding new BNB to the LP, which avoids the issue other automatic LP tokens have of taking BNB out of the pool, and as a result decreasing the price of the token.
