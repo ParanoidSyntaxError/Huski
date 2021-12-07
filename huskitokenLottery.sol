@@ -836,9 +836,12 @@ contract Huski is IERC20, IERC20Metadata, VRFConsumerBase, Context, Ownable
 
     function _checkLotteryTime() private
     {
-        if(_lotteryFinished() && _lotteryRollover() == false && _vrfLocked == false)
+        if(_lotteryFinished() && _vrfLocked == false)
         {
-            _getRandomNumber();
+            if(_lotteryRollover() == false)
+            {
+                _getRandomNumber();
+            }
         }
     }
 
