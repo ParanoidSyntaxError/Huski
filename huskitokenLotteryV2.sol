@@ -553,19 +553,8 @@ interface IERC20Metadata is IERC20
     function decimals() external view returns (uint8);
 }
 
-// Huski token
-contract Huski is IERC20, IERC20Metadata, VRFConsumerBase, Context, Ownable
+abstract contract Lottery is VRFConsumerBase, Context, Ownable
 {
-    // Libraries
-    using Address for address;
-
-    // Chainlink
-    bytes32 private _keyHash;
-    uint256 private _fee;
-    
-    bool private _vrfLocked;
-
-    // Lottery
     struct TicketBalance
     {
         uint256 tickets;
@@ -574,188 +563,33 @@ contract Huski is IERC20, IERC20Metadata, VRFConsumerBase, Context, Ownable
 
     event TicketsBought(address indexed from, uint256 amount);
 
-    mapping(address => TicketBalance) private _ticketBalances;
+    event LotteryAwarded(address indexed to, uint256 value);
+    event LotteryRollover(uint256 value);
 
-    address[] private _tickets;
-    uint256 private _ticketCount;
+    mapping(address => TicketBalance) internal _ticketBalances;
+    address[] internal _tickets;
+    uint256 internal _ticketCount;
+    uint256 internal _ticketPrice;
 
-    address private _rewardPool;
+    mapping (address => uint256) internal _rRewards;
+    uint256 internal _lotteryPool;
+    address internal _lotteryWallet;
 
-    uint256 private _lotteryStart;
+    uint256 internal _lotteryStart;
+    uint256 internal _lotteryDuration;
 
-    uint256 private constant _lotteryDuration = 14 days;
-
-    uint256 private constant _ticketPrice = 10**15; // 1 finney
-
-    // Token
-    event Burn(address indexed from, uint256 value);
-    event PoolAwarded(address indexed to, uint256 value);
-    event PoolRollover(uint256 value);
-
-    mapping (address => uint256) private _rOwned;
-    mapping (address => uint256) private _tOwned;
-    mapping (address => mapping (address => uint256)) private _allowances;
-
-    string private _name;
-    string private _symbol;
-    uint8 private _decimals;
-
-    uint256 private _tTotal;
-    uint256 private _rTotal;
-
-    uint256 private _tReflectTotal;
-    uint256 private _tBurnTotal;
-    uint256 private _tRewardTotal;
+    // Chainlink
+    bytes32 internal _vrfKeyHash;
+    uint256 internal _vrfFee;
     
-    uint256 private constant _burnTax = 5;
-    uint256 private constant _reflectTax = 5;
-    uint256 private constant _poolTax = 5;
+    bool internal _vrfLocked;
 
-    uint256 private constant MAX = ~uint256(0);
+    function claimReward(address account) public virtual returns (bool) { }
+    function _claimReward(address account) internal virtual { }
 
-    // Uniswap
-    event LiquidityLocked(address indexed from, uint256 hskiValue, uint256 bnbValue, uint256 lpValue);
-
-    IUniswapV2Router02 public immutable uniswapV2Router;
-    address public immutable uniswapV2Pair;
-
-    constructor()    
-        VRFConsumerBase
-        (
-            0xa555fC018435bef5A13C6c6870a9d4C11DEC329C, // TESTNET VRF Coordinator
-            0x84b9B910527Ad5C03A9Ca831909E21e236EA7b06  // TESTNET LINK Token
-        )
+    function lotteryPool() public view returns (uint256)
     {
-        //Set token values
-        _name = "Huski";
-        _symbol = "HSKI";
-        _decimals = 18;
-
-        _tTotal = (10**9) * (10**_decimals);
-        _rTotal = (MAX - (MAX % _tTotal));
-
-        //Supply sent to contract deployer
-        _rOwned[_msgSender()] = _rTotal;
-        emit Transfer(address(this), _msgSender(), _tTotal);
-
-        //Start lottery
-        _rewardPool = address(this);
-        _resetLottery();
-
-        //Chainlink
-        _keyHash = 0xcaf3c3727e033261d383b315559476f48034c13b18f8cafed4d871abe5049186; //TESTNET
-        _fee = 0.1 * 10 ** 18; // 0.1 LINK (Varies by network)
-
-        //Uniswap router values
-        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3); //TESTNET Pancakeswap router address https://pancake.kiemtienonline360.com/#/swap
-        uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory()).createPair(address(this), _uniswapV2Router.WETH());
-        uniswapV2Router = _uniswapV2Router;
-    }
-
-    // Recieve BNB from Pancakeswap router when swaping
-    receive() external payable { } 
-
-    /*
-        Uniswap methods
-    */
-    
-    function _lockLiquidity() private
-    {
-        //Use all BNB in contract address
-        uint256 contractBalance = address(this).balance;
-        uint256 bnbAmount = contractBalance / 2;
-
-        //Swap BNB for HSKI
-        _swapBNBforHSKI(bnbAmount);
-
-        uint256 hskiAmount = balanceOf(address(this));
-
-        //Add liquidity to uniswap
-        (uint256 hskiAdded, uint256 bnbAdded, uint256 lpReceived) = _addLiquidity(hskiAmount, bnbAmount);
-        
-        emit LiquidityLocked(address(this), hskiAdded, bnbAdded, lpReceived);
-    }
-
-    function _swapBNBforHSKI(uint256 bnbAmount) private
-    {
-        //Swap route BNB -> HSKI
-        address[] memory path = new address[](2);
-        path[0] = uniswapV2Router.WETH();
-        path[1] = address(this);
-
-        //Swap BNB and recieve HSKI to contract address
-        uniswapV2Router.swapExactETHForTokensSupportingFeeOnTransferTokens{ value : bnbAmount } //BNB value
-        (
-            0,              //Minimum HSKI
-            path,           //Routing path
-            address(this),  //Receiver
-            block.timestamp //Deadline
-        );
-    }
-
-    function _swapBNBforLINK(uint256 bnbAmount) private
-    {
-        //Swap route BNB -> LINK
-        address[] memory path = new address[](2);
-        path[0] = uniswapV2Router.WETH();
-        path[1] = 0x84b9B910527Ad5C03A9Ca831909E21e236EA7b06; //LINK Testnet address
-
-        //Swap BNB and recieve LINK to contract address 
-        uniswapV2Router.swapETHForExactTokens{ value : bnbAmount } //BNB value
-        (
-            _fee,           //Minimum LINK
-            path,           //Routing path
-            address(this),  //Receiver
-            block.timestamp //Deadline
-        );
-    }
-
-    function _addLiquidity(uint256 hskiAmount, uint256 bnbAmount) private returns (uint256, uint256, uint256)
-    {
-        //Approve token transfer to cover all possible scenarios
-        _approve(address(this), address(uniswapV2Router), hskiAmount);
-
-        //Add liquidity to BNB/HSKI pool
-        return uniswapV2Router.addLiquidityETH{ value : bnbAmount } //BNB value
-        (
-            address(this),  //Token address
-            hskiAmount,     //HSKI amount
-            0,              //Minimum HSKI
-            0,              //Minimum BNB
-            address(this),  //LP token receiver
-            block.timestamp //Deadline
-        );
-    }
-
-    /*
-        Chainlink methods
-    */
-
-    //Requests randomness 
-    function _getRandomNumber() private returns (bytes32 requestId) 
-    {
-        require(LINK.balanceOf(address(this)) >= _fee, "Not enough LINK - fill contract with faucet");
-        _vrfLocked = true;
-        return requestRandomness(_keyHash, _fee);
-    }
-
-    //Callback function used by VRF Coordinator
-    function fulfillRandomness(bytes32 requestId, uint256 randomness) internal override 
-    {
-        uint256 rngResult = randomness % _ticketCount; //Random number within range
-
-        _awardPool(rngResult); //BAD, possibility of reverting
-        
-        _vrfLocked = false;
-    }
-
-    /*
-        Lottery methods
-    */
-
-    function rewardPool() public view returns (uint256)
-    {
-        return balanceOf(_rewardPool);
+        return _lotteryPool;
     }
 
     function remainingLotteryTime() public view returns (uint256)
@@ -817,26 +651,18 @@ contract Huski is IERC20, IERC20Metadata, VRFConsumerBase, Context, Ownable
         return true;
     }
 
-    function _awardPool(uint256 ticketIndex) private
+    function _lotteryFinished() internal view returns (bool)
     {
-        require(ticketIndex > 0);
-        require(ticketIndex < _ticketCount);
-
-        address winner = _tickets[ticketIndex];
-        uint256 tReward = balanceOf(_rewardPool);
-
-        _transfer(_rewardPool, winner, tReward);
-
-        _tRewardTotal = _tRewardTotal + tReward;
-
-        emit PoolAwarded(winner, tReward);
-
-        _lockLiquidity();
-
-        _resetLottery();
+        return (block.timestamp > _lotteryStart + _lotteryDuration);
     }
 
-    function _checkLotteryTime() private
+    function _restartLottery() internal 
+    {
+        _lotteryStart = block.timestamp;
+        _ticketCount = 0;
+    }
+
+    function _checkLotteryTime() internal
     {
         if(_lotteryFinished() && _vrfLocked == false)
         {
@@ -847,33 +673,229 @@ contract Huski is IERC20, IERC20Metadata, VRFConsumerBase, Context, Ownable
         }
     }
 
-    function _lotteryFinished() private view returns (bool)
-    {
-        return (block.timestamp > _lotteryStart + _lotteryDuration);
-    }
-
-    function _lotteryRollover() private returns (bool)
-    {   
-        if(LINK.balanceOf(address(this)) < _fee)
+    function _lotteryRollover() private returns (bool) 
+    { 
+        if(_ticketCount <= 0 || LINK.balanceOf(address(this)) < _vrfFee)
         {
-            _swapBNBforLINK(address(this).balance);
-        }
+            _restartLottery();
 
-        if(_ticketCount <= 0 || LINK.balanceOf(address(this)) < _fee)
-        {
-            _resetLottery();
-
-            emit PoolRollover(balanceOf(_rewardPool));
+            emit LotteryRollover(_lotteryPool);
             return true;
         }
 
         return false;
     }
 
-    function _resetLottery() private 
+    /*
+        Chainlink functions
+    */
+
+    function setVrfFee(uint256 amount) public onlyOwner
     {
-        _lotteryStart = block.timestamp;
-        _ticketCount = 0;
+        _vrfFee = amount;
+    }
+
+    //Requests randomness 
+    function _getRandomNumber() private returns (bytes32 requestId) 
+    {
+        require(LINK.balanceOf(address(this)) >= _vrfFee, "Not enough LINK - fill contract with faucet");
+        _vrfLocked = true;
+        return requestRandomness(_vrfKeyHash, _vrfFee);
+    }
+
+    //Callback function used by VRF Coordinator
+    function fulfillRandomness(bytes32 requestId, uint256 randomness) internal override 
+    {
+        uint256 rngResult = randomness % (_ticketCount - 1); //Random number within range
+
+        address winner = _tickets[rngResult];
+
+        _rRewards[winner] = _rRewards[winner] + _lotteryPool;
+
+        _lotteryPool = 0;
+
+        _restartLottery();
+
+        _vrfLocked = false;
+    }
+}
+
+
+// Huski token
+contract Huski is IERC20, IERC20Metadata, Lottery
+{
+    // Libraries
+    using Address for address;
+
+    // Token
+    event Burn(address indexed from, uint256 value);
+
+    mapping (address => uint256) private _rOwned;
+    mapping (address => uint256) private _tOwned;
+    mapping (address => mapping (address => uint256)) private _allowances;
+
+    string private _name;
+    string private _symbol;
+    uint8 private _decimals;
+
+    uint256 private _tTotal;
+    uint256 private _rTotal;
+
+    uint256 private _tReflectTotal;
+    uint256 private _tBurnTotal;
+    uint256 private _tRewardTotal;
+    
+    uint256 private constant _burnTax = 5;
+    uint256 private constant _reflectTax = 5;
+    uint256 private constant _poolTax = 5;
+
+    uint256 private constant MAX = ~uint256(0);
+
+    // Uniswap
+    event LiquidityLocked(address indexed from, uint256 hskiValue, uint256 bnbValue, uint256 lpValue);
+
+    IUniswapV2Router02 public immutable uniswapV2Router;
+    address public immutable uniswapV2Pair;
+
+    constructor()    
+        VRFConsumerBase
+        (
+            0xa555fC018435bef5A13C6c6870a9d4C11DEC329C, // TESTNET VRF Coordinator
+            0x84b9B910527Ad5C03A9Ca831909E21e236EA7b06  // TESTNET LINK Token
+        )
+    {
+        //Set token values
+        _name = "Huski";
+        _symbol = "HSKI";
+        _decimals = 18;
+
+        _tTotal = (10**9) * (10**_decimals);
+        _rTotal = (MAX - (MAX % _tTotal));
+
+        //Supply sent to contract deployer
+        _rOwned[_msgSender()] = _rTotal;
+        emit Transfer(address(this), _msgSender(), _tTotal);
+
+        //Setup lottery
+        _vrfFee = 10**17; //0.2 LINK
+        _vrfKeyHash = 0xcaf3c3727e033261d383b315559476f48034c13b18f8cafed4d871abe5049186; //TESTNET
+
+        _ticketPrice = 10**15; //1 finney
+        _lotteryDuration = 14 days;
+        _lotteryWallet = address(this);
+        
+        _restartLottery();
+
+        //Uniswap router values
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3); //TESTNET Pancakeswap router address https://pancake.kiemtienonline360.com/#/swap
+        uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory()).createPair(address(this), _uniswapV2Router.WETH());
+        uniswapV2Router = _uniswapV2Router;
+    }
+
+    // Recieve BNB from Pancakeswap router when swaping
+    receive() external payable { } 
+
+    /*
+        Uniswap methods
+    */
+    
+    function _lockLiquidity() private
+    {
+        //Use all BNB in contract address
+        uint256 contractBalance = address(this).balance;
+        require(contractBalance > 0);
+        uint256 bnbAmount = contractBalance / 2;
+
+        uint256 startingHskiAmount = balanceOf(address(this));
+
+        //Swap BNB for HSKI
+        _swapBNBforHSKI(bnbAmount);
+
+        uint256 hskiAmount = balanceOf(address(this)) - startingHskiAmount;
+
+        //Add liquidity to uniswap
+        (uint256 hskiAdded, uint256 bnbAdded, uint256 lpReceived) = _addLiquidity(hskiAmount, bnbAmount);
+        
+        emit LiquidityLocked(address(this), hskiAdded, bnbAdded, lpReceived);
+    }
+
+    function _swapBNBforHSKI(uint256 bnbAmount) private
+    {
+        //Swap route BNB -> HSKI
+        address[] memory path = new address[](2);
+        path[0] = uniswapV2Router.WETH();
+        path[1] = address(this);
+
+        //Swap BNB and recieve HSKI to contract address
+        uniswapV2Router.swapExactETHForTokensSupportingFeeOnTransferTokens{ value : bnbAmount } //BNB value
+        (
+            0,              //Minimum HSKI
+            path,           //Routing path
+            address(this),  //Receiver
+            block.timestamp //Deadline
+        );
+    }
+
+    function _swapBNBforLINK(uint256 bnbAmount, uint256 linkAmount) private
+    {
+        //Swap route BNB -> LINK
+        address[] memory path = new address[](2);
+        path[0] = uniswapV2Router.WETH();
+        path[1] = 0x84b9B910527Ad5C03A9Ca831909E21e236EA7b06; //LINK Testnet address
+
+        //Swap BNB and recieve LINK to contract address 
+        uniswapV2Router.swapETHForExactTokens{ value : bnbAmount } //BNB value
+        (
+            linkAmount,     //Exact LINK
+            path,           //Routing path
+            address(this),  //Receiver
+            block.timestamp //Deadline
+        );
+    }
+
+    function _addLiquidity(uint256 hskiAmount, uint256 bnbAmount) private returns (uint256, uint256, uint256)
+    {
+        //Approve token transfer to cover all possible scenarios
+        _approve(address(this), address(uniswapV2Router), hskiAmount);
+
+        //Add liquidity to BNB/HSKI pool
+        return uniswapV2Router.addLiquidityETH{ value : bnbAmount } //BNB value
+        (
+            address(this),  //Token address
+            hskiAmount,     //HSKI amount
+            0,              //Minimum HSKI
+            0,              //Minimum BNB
+            address(this),  //LP token receiver
+            block.timestamp //Deadline
+        );
+    }
+
+    /*
+        Lottery methods
+    */
+
+    function claimReward(address account) public override returns (bool)
+    {
+        _claimReward(account);
+        return true;
+    }
+
+    function _claimReward(address account) internal override
+    {
+        uint256 rReward = _rRewards[account];
+
+        require(rReward > 0);
+
+        uint256 tReward = _tokenFromReflection(rReward);
+
+        _transfer(_lotteryWallet, account, tReward);
+
+        _tRewardTotal = _tRewardTotal + tReward;
+
+        if(address(this).balance > 0)
+        {
+            _lockLiquidity();
+        }
     }
 
     /*
@@ -1015,7 +1037,8 @@ contract Huski is IERC20, IERC20Metadata, VRFConsumerBase, Context, Ownable
 
     function _poolFee(uint256 rPool) private
     {
-        _rOwned[_rewardPool] = _rOwned[_rewardPool] + rPool;
+        _rOwned[_lotteryWallet] = _rOwned[_lotteryWallet] + rPool;
+        _lotteryPool = _lotteryPool + rPool;
     }
 
     function _transferValues(uint256 tAmount) private view returns (uint256, uint256, uint256)
@@ -1081,10 +1104,7 @@ contract Huski is IERC20, IERC20Metadata, VRFConsumerBase, Context, Ownable
         _burnFee(rBurn, tBurn);
         _poolFee(rPool);
         
-        if(_lotteryFinished() == true)
-        {
-            _checkLotteryTime();
-        }
+        _checkLotteryTime();
 
         emit Transfer(sender, recipient, tTransferAmount);
     }
