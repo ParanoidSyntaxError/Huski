@@ -587,7 +587,7 @@ abstract contract Lottery is VRFConsumerBase
     function claimReward(address account) public virtual returns (bool) { }
 
     function _checkLottery() internal virtual { }
-    function _lotteryRollover() internal virtual returns (bool) { }
+    function _lotteryRollover() public virtual returns (bool) { }
     function _drawLottery(uint256 randomNumber) internal virtual { }
     function _claimReward(address account) internal virtual { }
 
@@ -599,6 +599,11 @@ abstract contract Lottery is VRFConsumerBase
     /*
         Lottery functions
     */
+
+    function ticketPrice() public view returns (uint256)
+    {
+        return _ticketPrice;
+    }
 
     function totalUnclaimedRewards() public view returns (uint256)
     {
@@ -624,7 +629,7 @@ abstract contract Lottery is VRFConsumerBase
     {
         uint256 index = _holderIndexes[account];
 
-        if(index == 0 || index >= _tickets.length)
+        if(index >= _tickets.length)
         {
             return 0;
         }
@@ -637,6 +642,11 @@ abstract contract Lottery is VRFConsumerBase
         }
 
         return 0;
+    }
+
+    function unclaimedRewardsOf(address account) public view returns (uint256)
+    {
+        return _tRewards[account];
     }
 
     function _lotteryFinished() internal view returns (bool)
@@ -692,7 +702,6 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
     address private _burnWallet;
 
     uint256 private _tReflectTotal;
-    uint256 private _tBurnTotal;
     uint256 private _tLotteryTotal;
     
     uint256 private constant _burnTax = 5;
@@ -740,9 +749,6 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
         _ticketPrice = 10**15; //0.001 BNB
         _lotteryDuration = 14 days;
         _lotteryWallet = address(this);
-        
-        //Initalize tickets array with null object at index 0
-        _tickets.push();
 
         _restartLottery();
 
@@ -777,15 +783,21 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
         require(contractBalance > 0);
         uint256 bnbAmount = contractBalance / 2;
 
-        uint256 startingHskiAmount = balanceOf(address(this));
+        uint256 rStartingHskiAmount = _rOwned[owner()];
 
         //Swap BNB for HSKI
         _swapBNBforHSKI(bnbAmount);
 
-        uint256 hskiAmount = balanceOf(address(this)) - startingHskiAmount;
+        uint256 rHskiAmount = _rOwned[owner()] - rStartingHskiAmount;
+
+        //Uniswap factory doesn't allow reciever to be token contract address
+        _rOwned[owner()] -= rHskiAmount;
+        _rOwned[address(this)] += rHskiAmount;
+
+        uint256 tHskiAmount = _tokenFromReflection(rHskiAmount);
 
         //Add liquidity to uniswap
-        (uint256 hskiAdded, uint256 bnbAdded, uint256 lpReceived) = _addLiquidity(hskiAmount, bnbAmount);
+        (uint256 hskiAdded, uint256 bnbAdded, uint256 lpReceived) = _addLiquidity(tHskiAmount, bnbAmount);
         
         emit LiquidityLocked(address(this), hskiAdded, bnbAdded, lpReceived);
     }
@@ -797,12 +809,12 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
         (
             0,              //Minimum HSKI
             _bnbToHSKI,     //Routing path
-            address(this),  //Receiver
+            owner(),        //Receiver (can't set recieve to token contract address)
             block.timestamp //Deadline
         );
     }
 
-    function _swapBNBforLINK(uint256 bnbAmount, uint256 linkAmount) public
+    function _swapBNBforLINK(uint256 bnbAmount, uint256 linkAmount) private
     {
         //Swap BNB and recieve LINK to contract address 
         uniswapV2Router.swapETHForExactTokens{ value : bnbAmount } //BNB value
@@ -838,7 +850,23 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
     // DEBUG METHOD
     function stopLottery() public onlyOwner returns (bool) //DO NOT DEPLOY TO MAINNET
     {
-        requestRandomTicket();
+        if(_ticketCount <= 0)
+        {
+            _restartLottery();
+
+            emit LotteryRollover(lotteryPool());
+            return true;
+        }
+        else
+        {
+            if(LINK.balanceOf(address(this)) < _vrfFee)
+            {
+                _swapBNBforLINK(address(this).balance, _vrfFee);
+            }
+
+            requestRandomTicket();
+        }
+
         return true;
     }
 
@@ -857,10 +885,8 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
         uint256 senderIndex = _holderIndexes[sender];
         uint256 ticketAmount = value / _ticketPrice;
 
-        if(senderIndex <= 0 || _tickets[senderIndex].timestamp != _lotteryStart)
+        if(_tickets[senderIndex].timestamp != _lotteryStart)
         {
-            _holderCount += 1;
-
             _holderIndexes[sender] = _holderCount;
 
             TicketBalance memory senderBalance;
@@ -876,6 +902,8 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
             {
                 _tickets[_holderCount] = senderBalance;
             }
+
+            _holderCount += 1;
         }
         else
         {
@@ -912,7 +940,7 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
         }
     }
 
-    function _lotteryRollover() internal override returns(bool)
+    function _lotteryRollover() public override returns(bool) //DEBUGGUING make internal
     {
         if(LINK.balanceOf(address(this)) < _vrfFee)
         {
@@ -938,8 +966,7 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
         address winner = address(this);
         uint256 ticketSum = 0;
 
-        //For each ticket purchased add senders address to tickets array
-        for (uint256 i = 1; i < _holderCount + 1; i++) 
+        for (uint256 i = 0; i < _holderCount; i++) 
         {
             ticketSum += _tickets[i].balance;
 
@@ -1001,6 +1028,11 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
         return _decimals;
     }
 
+    function burnWallet() public view returns (address)
+    {
+        return _burnWallet;
+    }
+
     function totalSupply() public view override returns (uint256) 
     {
         return _tTotal;
@@ -1018,7 +1050,7 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
 
     function totalBurn() public view returns (uint256)
     {
-        return _tBurnTotal;
+        return balanceOf(_burnWallet);
     }
 
     function totalLotteryRewards() public view returns (uint256)
@@ -1098,7 +1130,7 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
         return rAmount / currentRate; //tAmount
     }
 
-    function _reflectionFromToken(uint256 tAmount) public view returns(uint256) 
+    function _reflectionFromToken(uint256 tAmount) private view returns(uint256) 
     {
         require(tAmount <= _tTotal, "Amount must be less than supply");
         uint256 currentRate = _getRate();
@@ -1107,20 +1139,18 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
 
     function _reflectFee(uint256 rReflect, uint256 tReflect) private 
     {
-        _rTotal = _rTotal - rReflect;
-        _tReflectTotal = _tReflectTotal + tReflect;
+        _rTotal -= rReflect;
+        _tReflectTotal += tReflect;
     }
 
-    function _burnFee(uint256 rBurn, uint256 tBurn) private
+    function _burnFee(uint256 rBurn) private
     {
         _rOwned[_burnWallet] += rBurn;
-
-        _tBurnTotal = _tBurnTotal + tBurn;
     }
 
     function _lotteryFee(uint256 rLottery) private
     {
-        _rOwned[_lotteryWallet] = _rOwned[_lotteryWallet] + rLottery;
+        _rOwned[_lotteryWallet] += rLottery;
     }
 
     function _transferValues(uint256 tAmount) private view returns (uint256, uint256, uint256)
@@ -1177,13 +1207,13 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
         require(tAmount > 0, "Transfer amount must be greater than zero");
 
         (uint256 rAmount, uint256 rTransferAmount, uint256 tTransferAmount) = _transferValues(tAmount);
-        (uint256 rReflect, uint256 tReflect, uint256 rBurn, uint256 tBurn, uint256 rLottery,) = _taxValues(tAmount);
+        (uint256 rReflect, uint256 tReflect, uint256 rBurn,, uint256 rLottery,) = _taxValues(tAmount);
         
-        _rOwned[sender] = _rOwned[sender] - rAmount;
-        _rOwned[recipient] = _rOwned[recipient] + rTransferAmount;
+        _rOwned[sender] -= rAmount;
+        _rOwned[recipient] += rTransferAmount;
 
         _reflectFee(rReflect, tReflect);
-        _burnFee(rBurn, tBurn);
+        _burnFee(rBurn);
         _lotteryFee(rLottery);
         
         _checkLottery();
@@ -1209,7 +1239,7 @@ contract Huski is IERC20, IERC20Metadata, Lottery, Context, Ownable
         
         _rOwned[account] -= rAmount;
 
-        _burnFee(rAmount, tAmount);
+        _burnFee(rAmount);
 
         emit Burn(account, tAmount);
     }
