@@ -1,6 +1,6 @@
 # Huski
 
-![Huski-04](https://user-images.githubusercontent.com/71923508/158597815-11edb83f-0e1e-4c2c-b228-e9d9a8834784.png)
+![Huski-02 - Copy](https://user-images.githubusercontent.com/71923508/158597915-ddcf9f3b-b0b1-4f82-a5b6-7eb415bfc5f3.png)
 
 One billion total supply. 5% transfer fee - 2% to staking pool, 2% lottery pool, 1% burnt.
 
