@@ -45,6 +45,7 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
     uint256 private _lotteryDuration = 7 days;
 
     // Chainlink
+
     VRFCoordinatorV2Interface private _vrfCoordinator;
     LinkTokenInterface private _linkToken;
 
@@ -70,8 +71,8 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
     address[] private _bnbToLINK;
     address[] private _bnbToHSKI;
 
-    //0x10ED43C718714eb63d5aA57B78B54704E256024E - MAINNET https://pancakeswap.finance/swap
-    address private constant _pancakeswapRouter = 0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3; //TESTNET https://pancake.kiemtienonline360.com/#/swap
+    //TESTNET https://pancake.kiemtienonline360.com/#/swap
+    address private constant _pancakeswapRouter = 0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3; 
 
     address private _swapReceiver;
 
@@ -262,7 +263,7 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
             _swapBNBforLINK(address(this).balance, _vrfFee * 100);
         }
 
-        topUpVRFSubscription(_linkToken.balanceOf(address(this)));
+        _topUpVRFSubscription(_linkToken.balanceOf(address(this)));
 
         (uint96 newSubBalance,,,) = _vrfCoordinator.getSubscription(_subscriptionId);
 
@@ -416,7 +417,7 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
         _drawLottery(randomValues[0]);
     }
 
-    function topUpVRFSubscription(uint256 amount) public 
+    function _topUpVRFSubscription(uint256 amount) private 
     {
         _linkToken.transferAndCall(address(_vrfCoordinator), amount, abi.encode(_subscriptionId));
     }

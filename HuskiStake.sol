@@ -30,11 +30,11 @@ contract HuskiStake is HuskiToken
 
     constructor()
     {
-        _stakingOptions[0] = StakingOption(30 days, 0);
-        _stakingOptions[1] = StakingOption(90 days, 10);
-        _stakingOptions[2] = StakingOption(180 days, 25);
-        _stakingOptions[3] = StakingOption(360 days, 60);
-        _stakingOptions[4] = StakingOption(720 days, 140);
+        _stakingOptions[0] = StakingOption(30 days, 0);     //1 month
+        _stakingOptions[1] = StakingOption(90 days, 10);    //3 months
+        _stakingOptions[2] = StakingOption(180 days, 25);   //6 months
+        _stakingOptions[3] = StakingOption(360 days, 60);   //1 year
+        _stakingOptions[4] = StakingOption(720 days, 140);  //2 years
     }
 
     function stakePool() public view returns (uint256)
@@ -61,8 +61,22 @@ contract HuskiStake is HuskiToken
         _balances[sender] -= amount;
         _balances[address(this)] += amount;
         
-        //TODO: If element exists with 0 staked, asign values instead of push()
-        _stakes[sender].push(Stake(amount, _profitPerShare, unlockTime, stakeBonus));
+        bool stakesFull = true;
+
+        for(uint256 i = 0; i < _stakes[sender].length; i++)
+        {
+            if(_stakes[sender][i].amount == 0)
+            {
+                _stakes[sender][i] = Stake(amount, _profitPerShare, unlockTime, stakeBonus);
+                stakesFull = false;
+                break;
+            }
+        }
+
+        if(stakesFull == true)
+        {
+            revert();
+        }
     }
 
     function withdraw(uint256 index) external 
