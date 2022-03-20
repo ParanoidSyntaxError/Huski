@@ -8,7 +8,6 @@ contract HuskiStake is HuskiToken
    struct Stake 
    {
         uint256 amount;
-        uint256 profitStart;
         uint256 unlockTime;
         uint256 bonus;
     }
@@ -19,7 +18,7 @@ contract HuskiStake is HuskiToken
         uint256 bonus;
     }
 
-    uint256 private _profitPerShare;
+    uint256 private _earningPool;
 
     uint256 private _totalShares;
     uint256 private _totalStaked;
@@ -39,7 +38,7 @@ contract HuskiStake is HuskiToken
 
     function stakePool() public view returns (uint256)
     {
-        return _totalStaked + (_profitPerShare * _totalShares);
+        return _totalStaked + _earningPool;
     }
 
     function deposit(uint256 amount, uint256 optionIndex) external 
@@ -67,7 +66,7 @@ contract HuskiStake is HuskiToken
         {
             if(_stakes[sender][i].amount == 0)
             {
-                _stakes[sender][i] = Stake(amount, _profitPerShare, unlockTime, stakeBonus);
+                _stakes[sender][i] = Stake(amount, unlockTime, stakeBonus);
                 stakesFull = false;
                 break;
             }
@@ -93,10 +92,14 @@ contract HuskiStake is HuskiToken
                
         uint256 shares = (stake.amount * (100 + stake.bonus)) / 100;
 
+        uint256 earnings = shares * (_earningPool / _totalShares);
+
+        _earningPool -= earnings;
+
         _totalStaked -= stake.amount;
         _totalShares -= shares;
 
-        uint256 withdrawAmount = stake.amount + (shares * _profitPerShare);
+        uint256 withdrawAmount = stake.amount + earnings;
 
         _balances[sender] += withdrawAmount;
         _balances[address(this)] -= withdrawAmount;
@@ -106,6 +109,6 @@ contract HuskiStake is HuskiToken
 
     function _stakeFee(uint256 amount) internal override 
     {
-        _profitPerShare += amount / _totalShares;
+        _earningPool += amount;
     }
 }

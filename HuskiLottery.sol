@@ -120,6 +120,22 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
     // Recieve BNB from Pancakeswap router when swaping
     receive() external payable { } 
 
+    //TESTNET DEBUG
+    function stopLottery() public returns (bool)
+    {
+        if(_vrfLocked == false)
+        {
+            if(_checkLotteryRollover() == false)
+            {
+                _requestRandomTicket();
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     /*
         Lottery functions
     */
@@ -217,7 +233,7 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
 
     function checkLottery() external returns (bool)
     {
-        require(_checkLottery());
+        require(_checkLottery() == true);
         return true;
     }
 
@@ -241,7 +257,7 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
 
     function _checkLottery() private returns (bool)
     {
-        if(_lotteryFinished() && _vrfLocked == false)
+        if(_lotteryFinished() == true && _vrfLocked == false)
         {
             if(_checkLotteryRollover() == false)
             {
