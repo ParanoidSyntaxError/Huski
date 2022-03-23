@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import "./HuskiToken.sol";
 
-contract HuskiStake is HuskiToken
+contract HuskiStake
 {
    struct Stake 
    {
@@ -18,17 +18,21 @@ contract HuskiStake is HuskiToken
         uint256 bonus;
     }
 
-    uint256 private _earningPool;
-
     uint256 private _totalShares;
     uint256 private _totalStaked;
-
-    mapping(address => Stake[]) private _stakes;
     
-    mapping(uint256 => StakingOption) private _stakingOptions;
+    uint256 private _stakeEarnings;
 
-    constructor()
+    mapping(address => Stake[5]) private _stakes;
+    
+    StakingOption[5] private _stakingOptions;
+
+    HuskiToken private _hski;
+
+    constructor(HuskiToken token)
     {
+        _hski = token;
+
         _stakingOptions[0] = StakingOption(30 days, 0);     //1 month
         _stakingOptions[1] = StakingOption(90 days, 10);    //3 months
         _stakingOptions[2] = StakingOption(180 days, 25);   //6 months
@@ -36,30 +40,48 @@ contract HuskiStake is HuskiToken
         _stakingOptions[4] = StakingOption(720 days, 140);  //2 years
     }
 
-    function stakePool() public view returns (uint256)
+    function stakePool() external view returns(uint256)
     {
-        return _totalStaked + _earningPool;
+        return _hski.stakePool();
     }
 
-    function deposit(uint256 amount, uint256 optionIndex) external 
+    function getStakes(address account) external view returns (uint256[5][4] memory stakes)
+    {
+        for(uint256 i = 0; i < _stakes[account].length; i++)
+        {
+            stakes[i][0] = _stakes[account][i].amount;
+            stakes[i][1] = _stakes[account][i].bonus;
+            stakes[i][2] = _getEarnings(account, i);
+            stakes[i][3] = _stakes[account][i].unlockTime;
+        }
+
+        return stakes;
+    }
+
+    function _getEarnings(address account, uint256 index) private view returns (uint256)
+    {
+        return ((_stakes[account][index].amount * (100 + _stakes[account][index].bonus)) / 100) * (_stakeEarnings / _totalShares);
+    }
+
+    function _getShares(address account, uint256 index) private view returns (uint256)
+    {
+        return (_stakes[account][index].amount * (100 + _stakes[account][index].bonus)) / 100;
+    }
+
+    function depositStake(uint256 amount, uint256 optionIndex) external 
     {      
         require(amount > 0);
+        require(optionIndex < _stakingOptions.length);
 
-        address sender = _msgSender();
+        address sender = msg.sender;
 
-        require(_balances[sender] <= amount);
+        require(_hski.balanceOf(sender) >= amount);
+
+        _hski.transfer(sender, address(this), amount);
 
         uint256 stakeBonus = _stakingOptions[optionIndex].bonus;
         uint256 unlockTime = _stakingOptions[optionIndex].duration + block.timestamp;
-    
-        uint256 newShares = (amount * (100 + stakeBonus)) / 100;
 
-        _totalStaked += amount;
-        _totalShares += newShares;
-        
-        _balances[sender] -= amount;
-        _balances[address(this)] += amount;
-        
         bool stakesFull = true;
 
         for(uint256 i = 0; i < _stakes[sender].length; i++)
@@ -76,11 +98,18 @@ contract HuskiStake is HuskiToken
         {
             revert();
         }
+    
+        uint256 newShares = (amount * (100 + stakeBonus)) / 100;
+
+        _totalStaked += amount;
+        _totalShares += newShares;
+
+        _hski.setStakePool(_hski.stakePool() + amount);
     }
 
-    function withdraw(uint256 index) external 
+    function withdrawStake(uint256 index) external 
     {
-        address sender = _msgSender();
+        address sender = msg.sender;
 
         uint256 stakeCount = _stakes[msg.sender].length;
         require(index < stakeCount);
@@ -90,25 +119,26 @@ contract HuskiStake is HuskiToken
         require(stake.amount > 0);
         require(stake.unlockTime <= block.timestamp);
                
-        uint256 shares = (stake.amount * (100 + stake.bonus)) / 100;
+        _stakes[sender][index].amount = 0;
 
-        uint256 earnings = shares * (_earningPool / _totalShares);
+        uint256 shares = _getShares(sender, index);
 
-        _earningPool -= earnings;
+        uint256 earnings = _getEarnings(sender, index);
 
         _totalStaked -= stake.amount;
+        _stakeEarnings -= earnings;
         _totalShares -= shares;
+
+        _hski.setStakePool(_hski.stakePool() - (stake.amount + earnings));
 
         uint256 withdrawAmount = stake.amount + earnings;
 
-        _balances[sender] += withdrawAmount;
-        _balances[address(this)] -= withdrawAmount;
-
-        _stakes[sender][index].amount = 0;
+        _hski.transfer(sender, address(this), withdrawAmount);
     }
 
-    function _stakeFee(uint256 amount) internal override 
+    function _stakeFee(uint256 amount) internal 
     {
-        _earningPool += amount;
+        _stakeEarnings += amount;
+        _hski.setStakePool(_hski.stakePool() + amount);
     }
 }

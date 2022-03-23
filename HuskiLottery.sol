@@ -4,11 +4,9 @@ pragma solidity ^0.8.0;
 import "./VRFConsumerBaseV2.sol";
 import "./LinkTokenInterface.sol";
 import "./VRFCoordinatorV2Interface.sol";
-import "./IUniswapV2Factory.sol";
-import "./IUniswapV2Router02.sol";
-import "./HuskiStake.sol";
+import "./HuskiSwap.sol";
 
-contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
+contract HuskiLottery is VRFConsumerBaseV2
 {
     struct Ticket
     {
@@ -25,8 +23,6 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
     event TicketsBought(address indexed from, uint256 amount);
     event LotteryAwarded(address indexed to, uint256 value);
     event LotteryRollover(uint256 value);
-
-    event LiquidityLocked(address indexed from, uint256 hskiValue, uint256 bnbValue, uint256 lpValue);
 
     mapping(address => TicketBalance) private _ticketBalances;
     mapping(uint256 => Ticket) private _tickets;
@@ -45,14 +41,12 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
     uint256 private _lotteryDuration = 7 days;
 
     // Chainlink
-
     VRFCoordinatorV2Interface private _vrfCoordinator;
     LinkTokenInterface private _linkToken;
 
     //TESTNET VALUES
-    address private _vrfContract = 0x6A2AAd07396B36Fe02a22b33cf443582f682c82f;
-    address private _linkContract = 0x84b9B910527Ad5C03A9Ca831909E21e236EA7b06;
-    bytes32 private _keyHash = 0xd4bb89654db74673a187bd804519e65e3f71a52bc55f11da7601a13dcf505314;
+    address private constant VRF_CONTRACT = 0x6A2AAd07396B36Fe02a22b33cf443582f682c82f;
+    bytes32 private constant KEY_HASH = 0xd4bb89654db74673a187bd804519e65e3f71a52bc55f11da7601a13dcf505314;
 
     uint32 private _callbackGasLimit = 100000;
     uint16 private _requestConfirmations = 3;
@@ -63,53 +57,23 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
     uint256 private _vrfFee = (10**15) * 5; //0.005 LINK
     bool private _vrfLocked;
 
-    // Uniswap
+    HuskiSwap private _swap;
 
-    IUniswapV2Router02 public immutable uniswapV2Router;
-    address public immutable uniswapV2Pair;
+    HuskiToken private _hski;
 
-    address[] private _bnbToLINK;
-    address[] private _bnbToHSKI;
-
-    //TESTNET https://pancake.kiemtienonline360.com/#/swap
-    address private constant _pancakeswapRouter = 0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3; 
-
-    address private _swapReceiver;
-
-    uint256 private _hskiLocked;
-    uint256 private _bnbLocked;
-
-    constructor() VRFConsumerBaseV2(_vrfContract)
+    constructor(HuskiToken token, HuskiSwap swap) VRFConsumerBaseV2(VRF_CONTRACT)
     {      
-        address sender = _msgSender();
+        _hski = token;
+        _swap = swap;
 
-        //Uniswap
-        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(_pancakeswapRouter);
-        uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory()).createPair(address(this), _uniswapV2Router.WETH());
-        uniswapV2Router = _uniswapV2Router;
-
-        //Uniswap routing paths
-        //BNB -> LINK
-        _bnbToLINK = new address[](2);
-        _bnbToLINK[0] = _uniswapV2Router.WETH();
-        _bnbToLINK[1] = _linkContract;
-
-        //BNB -> HSKI
-        _bnbToHSKI = new address[](2);
-        _bnbToHSKI[0] = _uniswapV2Router.WETH();
-        _bnbToHSKI[1] = address(this);
-
-        //Set swap reciver to deployer address
-        _swapReceiver = sender;
-
-        //Chainlink
-        _vrfCoordinator = VRFCoordinatorV2Interface(_vrfContract);
-        _linkToken = LinkTokenInterface(_linkContract);
+        _vrfCoordinator = VRFCoordinatorV2Interface(VRF_CONTRACT);
+        _linkToken = LinkTokenInterface(_swap.LINK());
 
         //Create a subscription with a new subscription ID.
         address[] memory consumers = new address[](1);
         consumers[0] = address(this);
         _subscriptionId = _vrfCoordinator.createSubscription();
+
         //Add this contract as a consumer of its own subscription.
         _vrfCoordinator.addConsumer(_subscriptionId, consumers[0]);
 
@@ -117,17 +81,25 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
         _restartLottery();
     }
 
-    // Recieve BNB from Pancakeswap router when swaping
-    receive() external payable { } 
-
-    //TESTNET DEBUG
-    function stopLottery() public returns (bool)
+    function fulfillRandomWords(uint256, uint256[] memory randomWords) internal override 
     {
-        if(_vrfLocked == false)
+        _drawLottery(randomWords[0]);
+    }
+
+    function _requestRandom() internal 
+    {
+        //Will revert if subscription is not set and funded.
+        _requestId = _vrfCoordinator.requestRandomWords(KEY_HASH, _subscriptionId, _requestConfirmations, _callbackGasLimit, 1); 
+        _vrfLocked = true;
+    }
+
+    function _checkLottery() internal returns (bool)
+    {
+        if(_lotteryFinished() == true && _vrfLocked == false)
         {
             if(_checkLotteryRollover() == false)
             {
-                _requestRandomTicket();
+                _requestRandom();
             }
 
             return true;
@@ -136,9 +108,90 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
         return false;
     }
 
-    /*
-        Lottery functions
-    */
+    function _checkLotteryRollover() private returns(bool)
+    {
+        (uint96 subBalance,,,) = _vrfCoordinator.getSubscription(_subscriptionId);
+
+        if(subBalance < _vrfFee * 12)
+        {
+            _swap.swapBNBforLINK(address(this).balance, 0, address(this));
+        }
+
+        //_topUpVRFSubscription(_linkToken.balanceOf(address(this)));
+
+        (uint96 newSubBalance,,,) = _vrfCoordinator.getSubscription(_subscriptionId);
+
+        if(_ticketCount == 0 || _lotteryPool() == 0 || newSubBalance < _vrfFee)
+        {
+            _lotteryEnd = block.timestamp + _lotteryDuration;
+
+            emit LotteryRollover(_lotteryPool());
+            return true;
+        }
+
+        return false;
+    }
+
+    function vrfBalance() public view returns(uint256)
+    {
+        (uint96 subBalance,,,) = _vrfCoordinator.getSubscription(_subscriptionId);
+        return subBalance;
+    }
+
+    function topUpVrfSubscription() external returns (bool)
+    {
+        _transferVrfLink();
+        return true;
+    }
+
+    function _transferVrfLink() private
+    {
+        _linkToken.transferAndCall(address(_vrfCoordinator), _linkToken.balanceOf(address(this)), abi.encode(_subscriptionId));
+    }
+
+    function _refillVrf(uint256 bnbAmount, uint256 minLink) private
+    {
+        _swap.swapBNBforLINK(bnbAmount, minLink, address(this));
+        _transferVrfLink();
+    }
+
+
+
+    function claimReward(address account) external returns (bool)
+    {
+        uint256 reward = _rewards[account];
+
+        require(reward > 0);
+
+        _rewards[account] -= reward;
+
+        _unclaimedRewards = _unclaimedRewards - reward;
+
+        _hski.transfer(address(this), account, reward);
+
+        if(address(this).balance > 0)
+        {
+            _swap.lockLiquidity();
+        }
+
+        return true;
+    }
+
+    //TESTNET DEBUG
+    function stopLottery() public returns (bool)
+    {
+        if(_vrfLocked == false)
+        {
+            if(_checkLotteryRollover() == false)
+            {
+                _requestRandom();
+            }
+
+            return true;
+        }
+
+        return false;
+    }
 
     function lotteryPool() external view returns(uint256)
     {
@@ -186,7 +239,7 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
         uint256 value = msg.value;
         require(value >= _ticketPrice);
 
-        address sender = _msgSender();
+        address sender = msg.sender;
         uint256 ticketAmount = value / _ticketPrice;
 
         uint256 ticketPacks = ticketAmount / _ticketThreshold;
@@ -213,24 +266,6 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
         return true;
     }
 
-    function claimReward(address account) external returns (bool)
-    {
-        uint256 reward = _rewards[account];
-
-        require(reward > 0);
-
-        _transfer(_contractAddress, account, reward);
-
-        _unclaimedRewards = _unclaimedRewards - reward;
-
-        if(address(this).balance > 0)
-        {
-            _lockLiquidity();
-        }
-
-        return true;
-    }
-
     function checkLottery() external returns (bool)
     {
         require(_checkLottery() == true);
@@ -239,7 +274,7 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
 
     function _lotteryPool() private view returns(uint256)
     {
-        return balanceOf(_contractAddress) - (_unclaimedRewards + stakePool());
+        return _hski.balanceOf(address(this)) - (_unclaimedRewards + _hski.stakePool());
     }
 
     function _lotteryFinished() internal view returns (bool)
@@ -253,45 +288,6 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
         _lotteryEnd = block.timestamp + _lotteryDuration;
         _ticketCount = 0;
         _holderCount = 0;
-    }
-
-    function _checkLottery() private returns (bool)
-    {
-        if(_lotteryFinished() == true && _vrfLocked == false)
-        {
-            if(_checkLotteryRollover() == false)
-            {
-                _requestRandomTicket();
-            }
-
-            return true;
-        }
-
-        return false;
-    }
-
-    function _checkLotteryRollover() private returns(bool)
-    {
-        (uint96 subBalance,,,) = _vrfCoordinator.getSubscription(_subscriptionId);
-
-        if(subBalance < _vrfFee * 12)
-        {
-            _swapBNBforLINK(address(this).balance, _vrfFee * 100);
-        }
-
-        _topUpVRFSubscription(_linkToken.balanceOf(address(this)));
-
-        (uint96 newSubBalance,,,) = _vrfCoordinator.getSubscription(_subscriptionId);
-
-        if(_ticketCount == 0 || _lotteryPool() == 0 || newSubBalance < _vrfFee)
-        {
-            _lotteryEnd = block.timestamp + _lotteryDuration;
-
-            emit LotteryRollover(_lotteryPool());
-            return true;
-        }
-
-        return false;
     }
 
     function _drawLottery(uint256 randomNumber) private
@@ -326,115 +322,5 @@ contract HuskiLottery is HuskiStake, VRFConsumerBaseV2
         _vrfLocked = false;
 
         emit LotteryAwarded(winner, reward);
-    }
-
-    /*
-        Uniswap functions
-    */
-
-    function totalHskiLocked() public view returns (uint256)
-    {
-        return _hskiLocked;
-    }
-
-    function totalBnbLocked() public view returns (uint256)
-    {
-        return _bnbLocked;
-    }
-
-    function lockLiquidity() external returns (bool)
-    {
-        _lockLiquidity();
-
-        return true;
-    }
-
-    function _lockLiquidity() private
-    {
-        //Use all BNB in contract address
-        uint256 contractBalance = address(this).balance;
-        require(contractBalance > 0);
-        uint256 bnbAmount = contractBalance / 2;
-
-        uint256 startingHskiAmount = _balances[_swapReceiver];
-
-        //Swap BNB for HSKI
-        _swapBNBforHSKI(bnbAmount);
-
-        uint256 hskiAmount = _balances[_swapReceiver] - startingHskiAmount;
-
-        //Uniswap factory doesn't allow reciever to be token contract address
-        _balances[_swapReceiver] -= hskiAmount;
-        _balances[address(this)] += hskiAmount;
-
-        //Add liquidity to uniswap
-        (uint256 hskiAdded, uint256 bnbAdded, uint256 lpReceived) = _addLiquidity(hskiAmount, bnbAmount);
-
-        _hskiLocked += hskiAdded;
-        _bnbLocked += bnbAdded;
-
-        emit LiquidityLocked(address(this), hskiAdded, bnbAdded, lpReceived);
-    }
-
-    function _swapBNBforHSKI(uint256 bnbAmount) private
-    {
-        //Swap BNB and recieve HSKI to contract address
-        uniswapV2Router.swapExactETHForTokensSupportingFeeOnTransferTokens{ value : bnbAmount } //BNB value
-        (
-            0,              //Minimum HSKI
-            _bnbToHSKI,     //Routing path
-            _swapReceiver,  //Receiver (can't set recieve to token contract address)
-            block.timestamp //Deadline
-        );
-    }
-
-    function _swapBNBforLINK(uint256 bnbAmount, uint256 linkAmount) private
-    {
-        //Swap BNB and recieve LINK to contract address 
-        uniswapV2Router.swapETHForExactTokens{ value : bnbAmount } //BNB value
-        (
-            linkAmount,     //Exact LINK
-            _bnbToLINK,     //Routing path
-            address(this),  //Receiver
-            block.timestamp //Deadline
-        );
-    }
-
-    function _addLiquidity(uint256 hskiAmount, uint256 bnbAmount) private returns (uint256, uint256, uint256)
-    {
-        //Approve token transfer to cover all possible scenarios
-        _approve(address(this), address(uniswapV2Router), hskiAmount);
-
-        //Add liquidity to BNB/HSKI pool
-        return uniswapV2Router.addLiquidityETH{ value : bnbAmount } //BNB value
-        (
-            address(this),  //Token address
-            hskiAmount,     //HSKI amount
-            0,              //Minimum HSKI
-            0,              //Minimum BNB
-            address(this),  //LP token receiver
-            block.timestamp //Deadline
-        );
-    }
-
-    /*
-        Chainlink functions
-    */
-
-    function _requestRandomTicket() internal 
-    {
-        //Will revert if subscription is not set and funded.
-        _requestId = _vrfCoordinator.requestRandomWords(_keyHash, _subscriptionId, _requestConfirmations, _callbackGasLimit, 1); 
-        _vrfLocked = true;
-    }
-
-    function fulfillRandomWords(uint256, uint256[] memory randomValues) internal override 
-    {
-        _drawLottery(randomValues[0]);
-    }
-
-    function _topUpVRFSubscription(uint256 amount) private 
-    {
-        _linkToken.transferAndCall(address(_vrfCoordinator), amount, abi.encode(_subscriptionId));
     }
 }
