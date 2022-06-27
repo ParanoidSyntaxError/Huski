@@ -8,13 +8,12 @@ import "./HuskiLottery.sol";
 
 contract Huski is IERC20, IERC20Metadata, HuskiStake, HuskiLottery
 {
-    event Burn(address indexed from, address indexed to, uint256 amount);
-
     string private constant NAME = "Huski";
     string private constant SYMBOL = "HSKI";
     uint8 private constant DECIMALS = 18;
 
-    uint256 private constant TOTAL_SUPPLY = (10**9) * (10**DECIMALS); //1 billion
+    uint256 private constant MAX_SUPPLY = (10**9) * (10**DECIMALS); //1 billion
+    uint256 private _totalSupply;
 
     mapping (address => uint256) private _balances;
     mapping (address => mapping (address => uint256)) private _allowances;
@@ -23,25 +22,18 @@ contract Huski is IERC20, IERC20Metadata, HuskiStake, HuskiLottery
     uint256 public constant BURN_TAX = 1;
     uint256 public constant LOTTERY_TAX = 2;
 
-    address public constant BURN_WALLET = 0x000000000000000000000000000000000000dEaD;
+    address public constant huskiPool = address(1);
 
-    uint256 public totalStakeFees;
-    uint256 public totalLotteryFees;
-
-    mapping (address => bool) private _taxExclusions;
+    mapping (address => bool) public taxExclusions;
 
     constructor() HuskiStake(this) HuskiLottery(this)
     {
-        _taxExclusions[address(this)] = true;
+        taxExclusions[address(this)] = true;
         
-        _balances[address(this)] = TOTAL_SUPPLY;
-        emit Transfer(address(0), address(this), TOTAL_SUPPLY);
-    }
+        _totalSupply = MAX_SUPPLY;
 
-    function setTaxExclusion(address account, bool value) public
-    {
-        require(msg.sender == address(this));
-        _taxExclusions[account] = value;
+        _balances[msg.sender] = _totalSupply;
+        emit Transfer(address(this), msg.sender, _totalSupply);
     }
 
     function name() public pure override returns (string memory) 
@@ -59,9 +51,9 @@ contract Huski is IERC20, IERC20Metadata, HuskiStake, HuskiLottery
         return DECIMALS;
     }
 
-    function totalSupply() public pure override returns (uint256) 
+    function totalSupply() public view override returns (uint256) 
     {
-        return TOTAL_SUPPLY;
+        return _totalSupply;
     }
 
     function balanceOf(address account) public view override returns (uint256) 
@@ -74,15 +66,34 @@ contract Huski is IERC20, IERC20Metadata, HuskiStake, HuskiLottery
         return _allowances[owner][spender];
     }
 
-    function totalBurn() public view returns (uint256)
-    {
-        return balanceOf(BURN_WALLET);
-    }
-
     function transfer(address recipient, uint256 amount) public override returns (bool) 
     {
         _transfer(msg.sender, recipient, amount);
         return true;
+    }
+
+    function totalBurn() public view returns (uint256)
+    {
+        return MAX_SUPPLY - _totalSupply;
+    }
+
+    function contractBurn() public returns (bool)
+    {
+        _burn(address(this), balanceOf(address(this)));
+        return true;
+    }
+
+    function burn(uint256 amount) public returns (bool)
+    {
+        _burn(msg.sender, amount);
+        return true;
+    }
+
+    function taxFreeTransfer(address sender, address recipient, uint256 amount) public
+    {
+        require(msg.sender == address(this));
+        _balances[sender] -= amount;
+        _balances[recipient] += amount;
     }
 
     function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) 
@@ -95,13 +106,6 @@ contract Huski is IERC20, IERC20Metadata, HuskiStake, HuskiLottery
         {
             _approve(sender, msg.sender, currentAllowance - amount);
         }
-
-        return true;
-    }
-
-    function burn(uint256 amount) public returns (bool)
-    {
-        _burn(msg.sender, amount);
 
         return true;
     }
@@ -131,19 +135,10 @@ contract Huski is IERC20, IERC20Metadata, HuskiStake, HuskiLottery
         return true;
     }
 
-    function rawTransfer(address sender, address recipient, uint256 amount) public
+    function setTaxExclusion(address account, bool value) public
     {
         require(msg.sender == address(this));
-        require(amount > 0);
-        require(balanceOf(sender) >= amount);
-
-        _balances[sender] -= amount;
-        _balances[recipient] += amount;
-    }
-
-    function _transferValues(uint256 amount) internal pure returns (uint256)
-    {
-        return amount - ((amount / 100) * (STAKE_TAX + BURN_TAX + LOTTERY_TAX));
+        taxExclusions[account] = value;
     }
 
     function _taxValues(uint256 amount) internal pure returns(uint256, uint256, uint256)
@@ -155,30 +150,27 @@ contract Huski is IERC20, IERC20Metadata, HuskiStake, HuskiLottery
     {
         require(sender != address(0));
         require(recipient != address(0));
-        require(amount > 0);
-        require(balanceOf(sender) >= amount);
-
-        //Huski lottery
-        _checkLottery();
 
         uint256 transferAmount = amount;
 
-        if(_taxExclusions[sender] == false)
+        if(taxExclusions[sender] == false)
         {
-            (uint256 stakeAmount, uint256 burnAmount, uint256 lotteryAmount) = _taxValues(amount);
+            (uint256 stakeFee, uint256 burnFee, uint256 lotteryFee) = _taxValues(amount);
 
-            _balances[sender] -= stakeAmount + lotteryAmount + burnAmount;
+            uint256 totalFee = stakeFee + burnFee + lotteryFee;
+         
+            //Burn
+            _burn(sender, burnFee);
 
-            _balances[address(this)] += stakeAmount + lotteryAmount;
-            _balances[BURN_WALLET] += burnAmount;
+            //Stake
+            _stakeFee(stakeFee);
 
-            //Huski stake
-            _stakeFee(stakeAmount);
+            //Lottery
+            _lotteryFee(lotteryFee);
 
-            totalStakeFees += stakeAmount;
-            totalLotteryFees += lotteryAmount;
+            taxFreeTransfer(sender, huskiPool, stakeFee + lotteryFee);
 
-            transferAmount = _transferValues(amount);
+            transferAmount -= totalFee;
         }
 
         _balances[sender] -= transferAmount;
@@ -189,14 +181,8 @@ contract Huski is IERC20, IERC20Metadata, HuskiStake, HuskiLottery
 
     function _burn(address account, uint256 amount) internal
     {
-        require(account != address(0));
-        require(amount > 0);
-        require(balanceOf(account) >= amount);
-
         _balances[account] -= amount;
-        _balances[BURN_WALLET] += amount;
-
-        emit Burn(msg.sender, BURN_WALLET, amount);
+        _totalSupply -= amount;
     }
 
     function _approve(address owner, address spender, uint256 amount) internal

@@ -8,8 +8,9 @@ contract HuskiStake
    struct Stake 
    {
         uint256 amount;
-        uint256 unlockTime;
-        uint256 bonus;
+        uint256 startTime;
+        uint256 startEarnings;
+        uint256 option;
     }
     
     struct StakingOption 
@@ -18,16 +19,15 @@ contract HuskiStake
         uint256 bonus;
     }
 
-    uint256 private _totalShares;
-    uint256 private _totalStaked;
+    uint256 public totalShares;
+    uint256 public totalStaked;
     
-    uint256 private _stakeEarnings;
+    uint256 public cumulativeEarnings;
+    uint256 public remainingEarnings;
 
-    mapping(address => Stake[5]) private _stakes;
+    mapping(address => Stake[5]) public stakes;
     
-    StakingOption[5] private _stakingOptions;
-
-    uint256 public stakePool;
+    StakingOption[6] public stakingOptions;
 
     Huski private _hski;
 
@@ -35,96 +35,90 @@ contract HuskiStake
     {
         _hski = huskiContract;
 
-        _stakingOptions[0] = StakingOption(30 days, 0);     //1 month
-        _stakingOptions[1] = StakingOption(90 days, 10);    //3 months
-        _stakingOptions[2] = StakingOption(180 days, 25);   //6 months
-        _stakingOptions[3] = StakingOption(360 days, 60);   //1 year
-        _stakingOptions[4] = StakingOption(720 days, 140);  //2 years
+        stakingOptions[0] = StakingOption(30 days, 0);     //1 month
+        stakingOptions[1] = StakingOption(90 days, 10);    //3 months
+        stakingOptions[2] = StakingOption(180 days, 25);   //6 months
+        stakingOptions[3] = StakingOption(360 days, 60);   //1 year
+        stakingOptions[4] = StakingOption(720 days, 140);  //2 years
+        stakingOptions[5] = StakingOption(1800 days, 390); //5 years
 
-        _stakingOptions[0] = StakingOption(0, 0);
+        stakingOptions[0] = StakingOption(0, 0);
     }
 
-    function _stakeFee(uint256 amount) internal
+    function stakeEarnings(address account, uint256 stakeIndex) public view returns (uint256)
     {
-        _stakeEarnings += amount;
-        stakePool += amount;
-    }
-    
-    function _getEarnings(address account, uint256 index) private view returns (uint256)
-    {
-        return ((_stakes[account][index].amount * (100 + _stakes[account][index].bonus)) / 100) * (_stakeEarnings / _totalShares);
+        uint256 sharesPerWei = (totalShares * 1000) / (cumulativeEarnings - stakes[account][stakeIndex].startEarnings);
+
+        if(block.timestamp > stakes[account][stakeIndex].startTime + stakingOptions[stakes[account][stakeIndex].option].duration + 30 days)
+        {
+            uint256 penalty = ((block.timestamp - stakingOptions[stakes[account][stakeIndex].option].duration) * 1000) / stakingOptions[stakes[account][stakeIndex].option].duration;
+
+            sharesPerWei = (sharesPerWei * penalty) - sharesPerWei;
+        }
+
+        return (_shareAmount(stakes[account][stakeIndex].amount, stakes[account][stakeIndex].option) * 1000) / sharesPerWei;
     }
 
-    function _getShares(address account, uint256 index) private view returns (uint256)
+    function depositStake(uint256 amount, uint256 optionIndex) external
     {
-        return (_stakes[account][index].amount * (100 + _stakes[account][index].bonus)) / 100;
-    }
-
-    function depositStake(uint256 amount, uint256 optionIndex) external 
-    {      
         require(amount > 0);
-        require(optionIndex < _stakingOptions.length);
+        require(optionIndex < stakingOptions.length);
+        require(_hski.balanceOf(msg.sender) >= amount);
 
-        address sender = msg.sender;
-
-        require(_hski.balanceOf(sender) >= amount);
-
-        _hski.rawTransfer(sender, address(this), amount);
-
-        uint256 stakeBonus = _stakingOptions[optionIndex].bonus;
-        uint256 unlockTime = _stakingOptions[optionIndex].duration + block.timestamp;
+        _hski.burn(amount);
 
         bool stakesFull = true;
 
-        for(uint256 i = 0; i < _stakes[sender].length; i++)
+        for(uint256 i = 0; i < stakes[msg.sender].length; i++)
         {
-            if(_stakes[sender][i].amount == 0)
+            if(stakes[msg.sender][i].amount == 0)
             {
-                _stakes[sender][i] = Stake(amount, unlockTime, stakeBonus);
+                stakes[msg.sender][i] = Stake(amount, block.timestamp, cumulativeEarnings, optionIndex);
+
+                uint256 newShares = _shareAmount(amount, optionIndex);
+
+                totalShares += newShares;
+                totalStaked += amount;
+
                 stakesFull = false;
                 break;
             }
         }
 
-        if(stakesFull == true)
-        {
-            revert();
-        }
-    
-        uint256 newShares = (amount * (100 + stakeBonus)) / 100;
-
-        _totalStaked += amount;
-        _totalShares += newShares;
-
-        stakePool += amount;
+        require(stakesFull == false);
     }
 
-    function withdrawStake(uint256 index) external 
+    function withdrawStake(uint256 index) external
     {
-        address sender = msg.sender;
+        require(index < stakes[msg.sender].length);
 
-        uint256 stakeCount = _stakes[msg.sender].length;
-        require(index < stakeCount);
-
-        Stake memory stake = _stakes[sender][index];
+        Stake memory stake = stakes[msg.sender][index];
 
         require(stake.amount > 0);
-        require(stake.unlockTime <= block.timestamp);
+        require(block.timestamp >= stake.startTime + stakingOptions[stake.option].duration);
                
-        _stakes[sender][index].amount = 0;
+        uint256 shares = _shareAmount(stake.amount, stake.option);
 
-        uint256 shares = _getShares(sender, index);
+        uint256 earnings = stakeEarnings(msg.sender, index);
 
-        uint256 earnings = _getEarnings(sender, index);
+        totalStaked -= stake.amount;
+        totalShares -= shares;
 
-        _totalStaked -= stake.amount;
-        _stakeEarnings -= earnings;
-        _totalShares -= shares;
+        remainingEarnings -= earnings;
 
-        stakePool -= stake.amount + earnings;
+        stakes[msg.sender][index].amount = 0;
 
-        uint256 withdrawAmount = stake.amount + earnings;
+        _hski.taxFreeTransfer(_hski.huskiPool(), msg.sender, stake.amount + earnings);
+    }
 
-        _hski.rawTransfer(address(this), sender, withdrawAmount);
+    function _stakeFee(uint256 amount) internal
+    {
+        cumulativeEarnings += amount;
+        remainingEarnings += amount;
+    }
+
+    function _shareAmount(uint256 amount, uint256 optionIndex) private view returns (uint256)
+    {
+        return (amount * (100 + stakingOptions[optionIndex].bonus)) / 100;
     }
 }
